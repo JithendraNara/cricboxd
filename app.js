@@ -21,9 +21,20 @@ const AppState = {
     team: 'All',
     rating: 'All'
   },
+  // Active tab on matches page
+  matchesTab: 'classic',
   // In-memory diary (extends the sample data)
   userDiary: [...DIARY_ENTRIES],
-  likedReviews: new Set()
+  likedReviews: new Set(),
+  // API data cache (in-memory)
+  apiLiveMatches: null,
+  apiRecentMatches: null,
+  apiUpcomingMatches: null,
+  apiStatus: 'disconnected', // 'connected' | 'disconnected' | 'error'
+  // Auto-refresh timer ID
+  liveRefreshTimer: null,
+  // Setup banner dismissed
+  bannerDismissed: false
 };
 
 // ============================================
@@ -70,6 +81,7 @@ const Router = {
 
   initPage(page) {
     switch (page) {
+      case 'home':    initHomePage(); break;
       case 'matches': initMatchesPage(); break;
       case 'diary':   initDiaryPage(); break;
       case 'profile': initProfilePage(); break;
@@ -124,47 +136,87 @@ function renderStumpRatingInput(currentRating = 0) {
       <div class="stump-wood"></div>
     </div>`;
   }
-  html += `<span class="rating-number" style="margin-left:12px;font-size:1.1rem">${currentRating > 0 ? currentRating.toFixed(1) : '—'}</span>`;
+  html += `<span class="rating-number" style="margin-left:12px;font-size:1.1rem">${currentRating > 0 ? currentRating.toFixed(1) : '\u2014'}</span>`;
   html += '</div>';
   return html;
 }
 
 // ============================================
-// COMPONENT: Match Card
+// COMPONENT: Match Card (supports both sample & API matches)
 // ============================================
 function renderMatchCard(match) {
-  const team1 = getTeam(match.team1);
-  const team2 = getTeam(match.team2);
-  const tournament = getTournament(match.tournament);
+  const isApiMatch = match.id && match.id.startsWith('api_');
+  const isLive = match.status === 'live';
+  const isUpcoming = match.status === 'upcoming';
+
+  let team1, team2;
+  if (isApiMatch) {
+    // API match uses full team names directly
+    team1 = { name: match.team1, short: match.team1Code || match.team1.substring(0,3).toUpperCase(), color: '#8b949e' };
+    team2 = { name: match.team2, short: match.team2Code || match.team2.substring(0,3).toUpperCase(), color: '#8b949e' };
+  } else {
+    team1 = getTeam(match.team1);
+    team2 = getTeam(match.team2);
+  }
+
+  const tournament = isApiMatch
+    ? null
+    : getTournament(match.tournament);
+
+  const tournamentLabel = isApiMatch
+    ? (match.tournamentName || '')
+    : (tournament?.name || '');
+
+  // Status badge
+  let statusBadge = '';
+  if (isLive) {
+    statusBadge = '<span class="live-badge">LIVE</span>';
+  } else if (isUpcoming) {
+    statusBadge = '<span class="match-status-badge upcoming">Upcoming</span>';
+  }
+
+  // Card class
+  const cardClass = isLive ? 'match-card live' : (isUpcoming ? 'match-card upcoming' : 'match-card');
+
+  // Score display — handle spoiler shield
+  const score1Html = (match.score1 && match.score1 !== 'N/A') ? match.score1 : (isUpcoming ? '\u2014' : '\u2014');
+  const score2Html = (match.score2 && match.score2 !== 'N/A') ? match.score2 : (isUpcoming ? '\u2014' : '\u2014');
+
+  // Date
+  const dateStr = match.date ? formatDate(match.date) : '';
 
   return `
-    <div class="match-card" data-match-id="${match.id}" onclick="openMatchDetail('${match.id}')">
+    <div class="${cardClass}" data-match-id="${match.id}" onclick="openMatchDetail('${match.id}')">
       <div class="match-card-header">
-        <span class="format-badge ${match.format.toLowerCase()}">${match.format}</span>
-        <span class="match-card-date">${formatDate(match.date)}</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="format-badge ${match.format.toLowerCase()}">${match.format}</span>
+          ${statusBadge}
+        </div>
+        <span class="match-card-date">${dateStr}</span>
       </div>
       <div class="match-card-teams">
         <div class="match-card-team">
           <span class="team-name">
-            <span class="team-flag" style="color:${team1.color}">${team1.short}</span>
+            <span class="team-flag" style="color:${team1.color}">${team1.short.substring(0,3)}</span>
             ${team1.name}
           </span>
-          <span class="team-score">${match.score1}</span>
+          <span class="team-score">${score1Html}</span>
         </div>
         <div class="match-card-team">
           <span class="team-name">
-            <span class="team-flag" style="color:${team2.color}">${team2.short}</span>
+            <span class="team-flag" style="color:${team2.color}">${team2.short.substring(0,3)}</span>
             ${team2.name}
           </span>
-          <span class="team-score">${match.score2}</span>
+          <span class="team-score">${score2Html}</span>
         </div>
       </div>
-      <div class="match-card-result">${match.result}</div>
+      <div class="match-card-result">${match.result || ''}</div>
+      ${tournamentLabel ? `<div class="match-card-tournament">${tournamentLabel}</div>` : ''}
       <div class="match-card-footer">
         <div class="match-card-rating">
-          ${renderStumpRating(match.communityRating)}
+          ${match.communityRating > 0 ? renderStumpRating(match.communityRating) : (isApiMatch ? '<span style="font-size:0.75rem;color:var(--text-muted)">No ratings yet</span>' : renderStumpRating(0))}
         </div>
-        <span class="match-card-logs">${match.totalLogs.toLocaleString()} logs</span>
+        <span class="match-card-logs">${match.totalLogs > 0 ? match.totalLogs.toLocaleString() + ' logs' : (isApiMatch ? 'Live data' : '0 logs')}</span>
       </div>
     </div>
   `;
@@ -178,18 +230,63 @@ function renderFormatBadge(format) {
 }
 
 // ============================================
+// COMPONENT: Loading Skeleton Cards
+// ============================================
+function renderSkeletonCards(count = 6) {
+  return Array.from({ length: count }, () => `
+    <div class="skeleton-card">
+      <div class="loading-skeleton">
+        <div class="skeleton-line short"></div>
+        <div class="skeleton-line title" style="margin-top:12px"></div>
+        <div class="skeleton-line medium" style="margin-top:6px"></div>
+        <div class="skeleton-line long" style="margin-top:12px"></div>
+        <div class="skeleton-line short" style="margin-top:6px"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ============================================
+// COMPONENT: API Status Indicator
+// ============================================
+function renderApiStatusBadge() {
+  if (!CricAPI.isConfigured()) {
+    return `<button class="api-status status-disconnected" onclick="openApiKeyModal()" title="Connect live cricket data">
+      <span class="api-status-dot"></span>Connect Live Data
+    </button>`;
+  }
+  if (AppState.apiStatus === 'connected') {
+    return `<span class="api-status status-connected" title="Live data connected">
+      <span class="api-status-dot"></span>Live Data Connected
+    </span>`;
+  }
+  if (AppState.apiStatus === 'error') {
+    return `<button class="api-status status-error" onclick="openApiKeyModal()" title="API connection error">
+      <span class="api-status-dot"></span>Connection Error
+    </button>`;
+  }
+  return `<button class="api-status status-disconnected" onclick="openApiKeyModal()">
+    <span class="api-status-dot"></span>Connect Live Data
+  </button>`;
+}
+
+// ============================================
 // PAGES
 // ============================================
 const Pages = {
 
   // ========== HOME PAGE ==========
   home() {
-    // Top rated matches for trending
     const trending = sortMatches(MATCHES, 'rating').slice(0, 6);
     const recentActivity = ACTIVITY_FEED.slice(0, 8);
 
     return `
       <div class="home-page">
+        ${!AppState.bannerDismissed && !CricAPI.isConfigured() ? this.renderSetupBanner() : ''}
+
+        <!-- LIVE TICKER placeholder — populated by initHomePage() -->
+        <div id="live-ticker-container"></div>
+
         <!-- HERO -->
         <section class="hero">
           <div class="container">
@@ -265,6 +362,19 @@ const Pages = {
     `;
   },
 
+  renderSetupBanner() {
+    return `
+      <div class="api-setup-banner" id="api-setup-banner">
+        <div class="api-setup-banner-text">
+          <span class="live-dot"></span>
+          <span>Get <strong>real-time live cricket scores</strong> — connect your free CricketData.org API key</span>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openApiKeyModal()">Connect Live Data</button>
+        <button class="api-banner-dismiss" onclick="dismissBanner()" title="Dismiss">&times;</button>
+      </div>
+    `;
+  },
+
   // ========== MATCHES PAGE ==========
   matches() {
     const allTeamCodes = [...new Set(MATCHES.flatMap(m => [m.team1, m.team2]))].sort();
@@ -274,44 +384,74 @@ const Pages = {
       <div class="matches-page">
         <section class="section" style="padding-top:var(--space-2xl)">
           <div class="container">
-            <h1 class="section-title" style="margin-bottom:var(--space-xl)">Matches</h1>
-            
-            <!-- FILTERS -->
-            <div class="filters-bar" id="matches-filters">
-              <div class="filter-group">
-                <span class="filter-label">Format</span>
-                <button class="filter-btn active" data-filter="format" data-value="All">All</button>
-                <button class="filter-btn" data-filter="format" data-value="Test">Test</button>
-                <button class="filter-btn" data-filter="format" data-value="ODI">ODI</button>
-                <button class="filter-btn" data-filter="format" data-value="T20">T20</button>
-              </div>
-              <div class="filter-group">
-                <span class="filter-label">Tournament</span>
-                <select class="filter-select" data-filter="tournament">
-                  <option value="All">All Tournaments</option>
-                  ${TOURNAMENTS.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
-                </select>
-              </div>
-              <div class="filter-group">
-                <span class="filter-label">Team</span>
-                <select class="filter-select" data-filter="team">
-                  <option value="All">All Teams</option>
-                  ${allTeamCodes.map(c => `<option value="${c}">${getTeam(c).name}</option>`).join('')}
-                </select>
-              </div>
-              <div class="filter-group sort-select">
-                <span class="filter-label">Sort</span>
-                <select class="filter-select" data-sort="true">
-                  <option value="rating">Top Rated</option>
-                  <option value="logs">Most Logged</option>
-                  <option value="date">Most Recent</option>
-                </select>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:var(--space-md);margin-bottom:var(--space-lg)">
+              <h1 class="section-title" style="margin-bottom:0">Matches</h1>
+              <div style="display:flex;align-items:center;gap:var(--space-sm)">
+                <span id="refresh-indicator" class="refresh-indicator idle" style="display:none">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                    <path d="M3 3v5h5"/>
+                  </svg>
+                  <span id="refresh-label">Refreshing...</span>
+                </span>
+                ${renderApiStatusBadge()}
               </div>
             </div>
 
-            <!-- MATCHES GRID -->
-            <div class="matches-grid stagger-children" id="matches-grid">
-              ${sortMatches(MATCHES, 'rating').map(m => renderMatchCard(m)).join('')}
+            <!-- TAB BAR -->
+            <div class="tab-bar" id="matches-tab-bar">
+              <button class="tab-btn tab-live ${AppState.matchesTab === 'live' ? 'active' : ''}" data-tab="live" onclick="switchMatchesTab('live')">
+                <span class="live-dot-tab"></span>Live Now
+              </button>
+              <button class="tab-btn ${AppState.matchesTab === 'recent' ? 'active' : ''}" data-tab="recent" onclick="switchMatchesTab('recent')">
+                Recent
+              </button>
+              <button class="tab-btn ${AppState.matchesTab === 'upcoming' ? 'active' : ''}" data-tab="upcoming" onclick="switchMatchesTab('upcoming')">
+                Upcoming
+              </button>
+              <button class="tab-btn ${AppState.matchesTab === 'classic' ? 'active' : ''}" data-tab="classic" onclick="switchMatchesTab('classic')">
+                Classic
+              </button>
+            </div>
+
+            <!-- Classic tab filters (only shown on classic tab) -->
+            <div id="classic-filters" style="display:${AppState.matchesTab === 'classic' ? 'block' : 'none'}">
+              <div class="filters-bar" id="matches-filters">
+                <div class="filter-group">
+                  <span class="filter-label">Format</span>
+                  <button class="filter-btn active" data-filter="format" data-value="All">All</button>
+                  <button class="filter-btn" data-filter="format" data-value="Test">Test</button>
+                  <button class="filter-btn" data-filter="format" data-value="ODI">ODI</button>
+                  <button class="filter-btn" data-filter="format" data-value="T20">T20</button>
+                </div>
+                <div class="filter-group">
+                  <span class="filter-label">Tournament</span>
+                  <select class="filter-select" data-filter="tournament">
+                    <option value="All">All Tournaments</option>
+                    ${TOURNAMENTS.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="filter-group">
+                  <span class="filter-label">Team</span>
+                  <select class="filter-select" data-filter="team">
+                    <option value="All">All Teams</option>
+                    ${allTeamCodes.map(c => `<option value="${c}">${getTeam(c).name}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="filter-group sort-select">
+                  <span class="filter-label">Sort</span>
+                  <select class="filter-select" data-sort="true">
+                    <option value="rating">Top Rated</option>
+                    <option value="logs">Most Logged</option>
+                    <option value="date">Most Recent</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB CONTENT -->
+            <div class="tab-content" id="matches-tab-content">
+              <!-- Populated by switchMatchesTab() -->
             </div>
           </div>
         </section>
@@ -635,7 +775,6 @@ const Pages = {
   },
 
   renderTopTeams() {
-    // Count team appearances in diary
     const teamCounts = {};
     AppState.userDiary.forEach(entry => {
       const match = getMatch(entry.matchId);
@@ -666,21 +805,54 @@ const Pages = {
 
 // ============================================
 // MATCH DETAIL MODAL
+// Handles both sample matches (by string ID)
+// and API matches (by api_XXX ID)
 // ============================================
 function openMatchDetail(matchId) {
-  const match = getMatch(matchId);
+  // Try sample data first
+  let match = getMatch(matchId);
+  const isApiMatch = !match && matchId && matchId.startsWith('api_');
+
+  if (isApiMatch) {
+    // Look in cached API data
+    match = findApiMatch(matchId);
+  }
+
   if (!match) return;
 
+  const container = document.getElementById('match-detail-container');
+
+  if (isApiMatch) {
+    renderApiMatchDetail(match, container);
+  } else {
+    renderSampleMatchDetail(match, container);
+  }
+
+  document.getElementById('match-modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function findApiMatch(matchId) {
+  const pools = [
+    AppState.apiLiveMatches,
+    AppState.apiRecentMatches,
+    AppState.apiUpcomingMatches
+  ];
+  for (const pool of pools) {
+    if (!pool) continue;
+    const found = pool.find(m => m.id === matchId);
+    if (found) return found;
+  }
+  return null;
+}
+
+function renderSampleMatchDetail(match, container) {
   const team1 = getTeam(match.team1);
   const team2 = getTeam(match.team2);
   const tournament = getTournament(match.tournament);
-  const reviews = getMatchReviews(matchId);
-
-  // Determine pitch report from tags
-  const dominantTag = match.tags[0] || 'Standard';
+  const reviews = getMatchReviews(match.id);
   const pitchType = getPitchType(match);
 
-  const container = document.getElementById('match-detail-container');
   container.innerHTML = `
     <div class="match-detail">
       <!-- HEADER -->
@@ -782,9 +954,88 @@ function openMatchDetail(matchId) {
       </div>
     </div>
   `;
+}
 
-  document.getElementById('match-modal').classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
+function renderApiMatchDetail(match, container) {
+  const t1Name = match.team1;
+  const t2Name = match.team2;
+  const isLive = match.status === 'live';
+  const isUpcoming = match.status === 'upcoming';
+
+  const statusHtml = isLive
+    ? '<span class="live-badge" style="font-size:0.75rem;padding:4px 12px">LIVE</span>'
+    : (isUpcoming ? '<span class="match-status-badge upcoming">Upcoming</span>' : '<span class="match-status-badge completed">Completed</span>');
+
+  container.innerHTML = `
+    <div class="match-detail">
+      <div class="api-match-notice">
+        <svg viewBox="0 0 20 20" width="14" height="14" fill="var(--amber)"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zM9 7h2v2H9V7zm0 4h2v4H9v-4z"/></svg>
+        Live data from CricketData.org — community ratings unavailable for live matches
+      </div>
+
+      <!-- HEADER -->
+      <div class="match-detail-header">
+        <div class="match-detail-format">
+          ${renderFormatBadge(match.format)}
+          ${statusHtml}
+          ${match.tournamentName ? `<span class="text-muted" style="margin-left:8px;font-size:0.85rem">${match.tournamentName}</span>` : ''}
+        </div>
+        <h2 class="match-detail-title">${t1Name} vs ${t2Name}</h2>
+        <p class="match-detail-venue">${match.venue}${match.date ? ' · ' + formatDate(match.date) : ''}</p>
+
+        <div class="match-detail-scores">
+          <div class="match-detail-team">
+            <div class="team-name">${t1Name}</div>
+            <div class="team-score">${match.score1 !== 'N/A' ? match.score1 : '—'}</div>
+          </div>
+          <div class="match-detail-vs">vs</div>
+          <div class="match-detail-team">
+            <div class="team-name">${t2Name}</div>
+            <div class="team-score">${match.score2 !== 'N/A' ? match.score2 : '—'}</div>
+          </div>
+        </div>
+
+        <div class="match-result">${match.result}</div>
+      </div>
+
+      <!-- LOG BUTTON -->
+      <div class="text-center mb-xl">
+        <button class="btn btn-primary" onclick="openLogModal('${match.id}')">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor"><path d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/></svg>
+          Log This Match
+        </button>
+      </div>
+
+      <!-- VENUE INFO -->
+      <div class="match-stats-grid">
+        <div class="match-stat-card">
+          <div class="match-stat-label">Format</div>
+          <div class="match-stat-value">${match.format}</div>
+          <div class="match-stat-detail">Match type</div>
+        </div>
+        <div class="match-stat-card">
+          <div class="match-stat-label">Venue</div>
+          <div class="match-stat-value">${match.venue ? match.venue.split(',')[0] : 'TBA'}</div>
+          <div class="match-stat-detail">${match.venue ? (match.venue.split(',')[1]?.trim() || '') : ''}</div>
+        </div>
+        ${match.tournamentName ? `
+        <div class="match-stat-card">
+          <div class="match-stat-label">Series / Tournament</div>
+          <div class="match-stat-value" style="font-size:0.9rem">${match.tournamentName}</div>
+          <div class="match-stat-detail">Series</div>
+        </div>` : ''}
+        <div class="match-stat-card">
+          <div class="match-stat-label">Status</div>
+          <div class="match-stat-value">${isLive ? 'In Progress' : (isUpcoming ? 'Upcoming' : 'Completed')}</div>
+          <div class="match-stat-detail">Match status</div>
+        </div>
+      </div>
+
+      <p class="text-muted" style="font-size:0.85rem;text-align:center;margin-top:var(--space-md)">
+        Detailed player stats, reviews and watch links are available for classic matches in the Classic tab.
+      </p>
+    </div>
+  `;
 }
 
 function renderReviewCard(review) {
@@ -825,13 +1076,25 @@ function getPitchType(match) {
 
 // ============================================
 // LOG MATCH MODAL
+// Works for both sample and API matches
 // ============================================
 function openLogModal(matchId) {
-  // Close match detail modal if open
   document.getElementById('match-modal').classList.add('hidden');
 
   const container = document.getElementById('log-form-container');
   const today = new Date().toISOString().split('T')[0];
+
+  // Build match options: sample data + any loaded API matches (using display name)
+  const apiMatches = [
+    ...(AppState.apiLiveMatches || []),
+    ...(AppState.apiRecentMatches || []),
+    ...(AppState.apiUpcomingMatches || [])
+  ];
+
+  const apiOptions = apiMatches.map(m => {
+    const selected = m.id === matchId ? 'selected' : '';
+    return `<option value="${m.id}" ${selected}>${m.team1} vs ${m.team2} — ${m.date ? formatDate(m.date) : 'Live'} (${m.format}) [Live]</option>`;
+  });
 
   container.innerHTML = `
     <form class="log-form" id="log-form" onsubmit="submitLog(event)">
@@ -846,6 +1109,7 @@ function openLogModal(matchId) {
             const selected = m.id === matchId ? 'selected' : '';
             return `<option value="${m.id}" ${selected}>${t1.name} vs ${t2.name} — ${formatDate(m.date)} (${m.format})</option>`;
           }).join('')}
+          ${apiOptions.length > 0 ? `<optgroup label="\u2500\u2500 Live / Recent from API \u2500\u2500">${apiOptions.join('')}</optgroup>` : ''}
         </select>
       </div>
 
@@ -908,7 +1172,6 @@ function openLogModal(matchId) {
   document.getElementById('log-modal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
 
-  // Init interactive rating
   initStumpRatingInput();
 }
 
@@ -952,9 +1215,7 @@ function initStumpRatingInput() {
   });
 
   container.addEventListener('mouseleave', () => {
-    const currentRating = parseInt(container.dataset.rating) || 0;
     stumps.forEach(s => {
-      const v = parseInt(s.dataset.value);
       s.querySelector('.stump-wood').style.opacity = '';
     });
   });
@@ -987,11 +1248,20 @@ function submitLog(event) {
   document.getElementById('log-modal').classList.add('hidden');
   document.body.style.overflow = '';
 
-  // Show success
-  const match = getMatch(matchId);
-  const t1 = getTeam(match.team1);
-  const t2 = getTeam(match.team2);
-  showToast(`Logged ${t1.short} vs ${t2.short}! ★${rating}`, 'success');
+  // Show success — handle both sample and API matches
+  const sampleMatch = getMatch(matchId);
+  if (sampleMatch) {
+    const t1 = getTeam(sampleMatch.team1);
+    const t2 = getTeam(sampleMatch.team2);
+    showToast(`Logged ${t1.short} vs ${t2.short}! ★${rating}`, 'success');
+  } else {
+    const apiMatch = findApiMatch(matchId);
+    if (apiMatch) {
+      showToast(`Logged ${apiMatch.team1} vs ${apiMatch.team2}! ★${rating}`, 'success');
+    } else {
+      showToast(`Match logged! ★${rating}`, 'success');
+    }
+  }
 
   // Re-render if on diary page
   if (AppState.currentPage === 'diary') {
@@ -1081,12 +1351,24 @@ function initSearch() {
       return;
     }
 
+    // Search sample matches
     const matchResults = MATCHES.filter(m => {
       const t1 = getTeam(m.team1);
       const t2 = getTeam(m.team2);
       const searchStr = `${t1.name} ${t2.name} ${m.venue} ${m.format} ${getTournament(m.tournament)?.name || ''}`.toLowerCase();
       return searchStr.includes(query);
     }).slice(0, 5);
+
+    // Search API matches
+    const apiMatchPool = [
+      ...(AppState.apiLiveMatches || []),
+      ...(AppState.apiRecentMatches || []),
+      ...(AppState.apiUpcomingMatches || [])
+    ];
+    const apiMatchResults = apiMatchPool.filter(m => {
+      const searchStr = `${m.team1} ${m.team2} ${m.venue} ${m.format} ${m.tournamentName || ''}`.toLowerCase();
+      return searchStr.includes(query);
+    }).slice(0, 3);
 
     const userResults = USERS.filter(u => {
       return u.username.toLowerCase().includes(query) || u.displayName.toLowerCase().includes(query);
@@ -1103,6 +1385,18 @@ function initSearch() {
           <div>
             <div class="search-result-text">${t1.name} vs ${t2.name}</div>
             <div class="search-result-meta">${m.format} · ${formatDate(m.date)} · ${m.venue.split(',')[0]}</div>
+          </div>
+        </div>
+      `;
+    });
+
+    apiMatchResults.forEach(m => {
+      html += `
+        <div class="search-result-item" onclick="document.getElementById('search-overlay').classList.add('hidden');openMatchDetail('${m.id}')">
+          <span class="search-result-type" style="background:rgba(231,76,60,0.1);color:#e74c3c;border:1px solid rgba(231,76,60,0.2)">Live</span>
+          <div>
+            <div class="search-result-text">${m.team1} vs ${m.team2}</div>
+            <div class="search-result-meta">${m.format} · ${m.status} · ${m.venue ? m.venue.split(',')[0] : ''}</div>
           </div>
         </div>
       `;
@@ -1166,7 +1460,6 @@ function initMobileMenu() {
     links.classList.toggle('open');
   });
 
-  // Close on link click
   links.querySelectorAll('.nav-link').forEach(link => {
     link.addEventListener('click', () => {
       links.classList.remove('open');
@@ -1179,20 +1472,22 @@ function initMobileMenu() {
 // MODAL CLOSE HANDLERS
 // ============================================
 function initModals() {
-  // Match detail modal
   document.getElementById('match-modal-close').addEventListener('click', () => {
     document.getElementById('match-modal').classList.add('hidden');
     document.body.style.overflow = '';
   });
 
-  // Log modal
   document.getElementById('log-modal-close').addEventListener('click', () => {
     document.getElementById('log-modal').classList.add('hidden');
     document.body.style.overflow = '';
   });
 
-  // Click outside to close
-  ['match-modal', 'log-modal'].forEach(id => {
+  document.getElementById('api-key-modal-close').addEventListener('click', () => {
+    document.getElementById('api-key-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+  });
+
+  ['match-modal', 'log-modal', 'api-key-modal'].forEach(id => {
     document.getElementById(id).addEventListener('click', (e) => {
       if (e.target.classList.contains('modal-overlay')) {
         document.getElementById(id).classList.add('hidden');
@@ -1201,83 +1496,579 @@ function initModals() {
     });
   });
 
-  // Escape key to close
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(modal => {
         modal.classList.add('hidden');
       });
       document.body.style.overflow = '';
-      
-      // Also close search
       document.getElementById('search-overlay').classList.add('hidden');
     }
+  });
+
+  // API key modal: toggle visibility
+  document.getElementById('api-key-toggle-vis')?.addEventListener('click', () => {
+    const input = document.getElementById('api-key-input');
+    if (!input) return;
+    input.type = input.type === 'password' ? 'text' : 'password';
   });
 }
 
 
 // ============================================
-// PAGE-SPECIFIC INIT FUNCTIONS
+// API KEY MODAL
 // ============================================
+function openApiKeyModal() {
+  const modal = document.getElementById('api-key-modal');
+  const input = document.getElementById('api-key-input');
+  const status = document.getElementById('api-key-status');
 
+  // Pre-fill with current key if set
+  if (CricAPI.apiKey) {
+    input.value = CricAPI.apiKey;
+    status.style.display = 'flex';
+    status.className = 'api-key-status connected';
+    status.textContent = '✓ API key is set';
+  } else {
+    input.value = '';
+    status.style.display = 'none';
+  }
+
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => input.focus(), 100);
+}
+
+async function saveApiKey() {
+  const input = document.getElementById('api-key-input');
+  const statusEl = document.getElementById('api-key-status');
+  const btn = document.getElementById('api-key-save-btn');
+  const key = input.value.trim();
+
+  if (!key) {
+    showToast('Please enter an API key', 'warning');
+    return;
+  }
+
+  // Show testing state
+  statusEl.style.display = 'flex';
+  statusEl.className = 'api-key-status testing';
+  statusEl.textContent = 'Testing connection...';
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+
+  CricAPI.setApiKey(key);
+
+  // Test the key with a lightweight call
+  const result = await CricAPI.getCurrentMatches();
+
+  if (result.error === 'INVALID_KEY') {
+    statusEl.className = 'api-key-status error';
+    statusEl.textContent = '✗ Invalid API key — check your key at cricketdata.org';
+    CricAPI.setApiKey(null);
+    AppState.apiStatus = 'error';
+    btn.disabled = false;
+    btn.textContent = 'Connect & Load Live Matches';
+    return;
+  }
+
+  if (result.error && result.error !== 'NETWORK_ERROR') {
+    statusEl.className = 'api-key-status error';
+    statusEl.textContent = `✗ ${CricAPI.getErrorMessage(result.error)}`;
+    btn.disabled = false;
+    btn.textContent = 'Connect & Load Live Matches';
+    return;
+  }
+
+  // Success
+  statusEl.className = 'api-key-status connected';
+  statusEl.textContent = '✓ Connected! Loading live matches...';
+  AppState.apiStatus = 'connected';
+
+  // Store live data
+  if (result.data) {
+    AppState.apiLiveMatches = result.data.filter(m => m.status === 'live');
+    AppState.apiRecentMatches = result.data.filter(m => m.status === 'completed');
+    AppState.apiUpcomingMatches = result.data.filter(m => m.status === 'upcoming');
+  }
+
+  // Update footer status
+  updateFooterApiStatus();
+
+  // Close modal after a beat
+  setTimeout(() => {
+    document.getElementById('api-key-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+    btn.disabled = false;
+    btn.textContent = 'Connect & Load Live Matches';
+
+    // Dismiss setup banner
+    AppState.bannerDismissed = true;
+    const banner = document.getElementById('api-setup-banner');
+    if (banner) banner.style.display = 'none';
+
+    showToast('Live cricket data connected!', 'success');
+
+    // If on matches page, switch to live tab
+    if (AppState.currentPage === 'matches') {
+      switchMatchesTab('live');
+    }
+    // If on home, refresh live ticker
+    if (AppState.currentPage === 'home') {
+      renderLiveTicker();
+    }
+
+    // Start auto-refresh
+    startLiveRefresh();
+  }, 1000);
+}
+
+function dismissBanner() {
+  AppState.bannerDismissed = true;
+  const banner = document.getElementById('api-setup-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function updateFooterApiStatus() {
+  const el = document.getElementById('footer-api-status');
+  if (!el) return;
+  el.innerHTML = renderApiStatusBadge();
+}
+
+
+// ============================================
+// HOME PAGE INIT — Live ticker
+// ============================================
+function initHomePage() {
+  renderLiveTicker();
+  updateFooterApiStatus();
+}
+
+function renderLiveTicker() {
+  const container = document.getElementById('live-ticker-container');
+  if (!container) return;
+
+  const liveMatches = AppState.apiLiveMatches;
+  if (!liveMatches || liveMatches.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  // Duplicate items for seamless loop
+  const items = [...liveMatches, ...liveMatches].map(m => `
+    <span class="live-ticker-item" onclick="openMatchDetail('${m.id}')">
+      <span class="live-ticker-teams">${m.team1} vs ${m.team2}</span>
+      <span class="live-ticker-score">${m.score1 !== 'N/A' ? m.score1 : ''} ${m.score2 !== 'N/A' ? '· ' + m.score2 : ''}</span>
+      <span class="live-ticker-status">${m.result}</span>
+    </span>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="live-ticker-wrap">
+      <div class="live-ticker-label">
+        <span class="live-badge">LIVE</span>
+      </div>
+      <div class="live-ticker-track">${items}</div>
+    </div>
+  `;
+}
+
+
+// ============================================
+// MATCHES PAGE — Tab logic + API loading
+// ============================================
 function initMatchesPage() {
+  // Render the current tab
+  switchMatchesTab(AppState.matchesTab);
+
+  // Init classic filters
   const filtersBar = document.getElementById('matches-filters');
-  if (!filtersBar) return;
-
-  // Format filter buttons
-  filtersBar.querySelectorAll('.filter-btn[data-filter="format"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      filtersBar.querySelectorAll('.filter-btn[data-filter="format"]').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      AppState.filters.format = btn.dataset.value;
-      renderFilteredMatches();
+  if (filtersBar) {
+    filtersBar.querySelectorAll('.filter-btn[data-filter="format"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        filtersBar.querySelectorAll('.filter-btn[data-filter="format"]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        AppState.filters.format = btn.dataset.value;
+        renderFilteredMatches();
+      });
     });
-  });
 
-  // Select dropdowns
-  filtersBar.querySelectorAll('.filter-select[data-filter]').forEach(select => {
-    select.addEventListener('change', () => {
-      AppState.filters[select.dataset.filter] = select.value;
-      renderFilteredMatches();
+    filtersBar.querySelectorAll('.filter-select[data-filter]').forEach(select => {
+      select.addEventListener('change', () => {
+        AppState.filters[select.dataset.filter] = select.value;
+        renderFilteredMatches();
+      });
     });
-  });
 
-  // Sort
-  filtersBar.querySelector('.filter-select[data-sort]')?.addEventListener('change', (e) => {
-    AppState.filters.sort = e.target.value;
-    renderFilteredMatches();
-  });
-
-  // Force the grid visible immediately on page load
-  const grid = document.getElementById('matches-grid');
-  if (grid) {
-    // Force immediate visibility for above-the-fold content
-    requestAnimationFrame(() => {
-      grid.classList.add('visible');
+    filtersBar.querySelector('.filter-select[data-sort]')?.addEventListener('change', (e) => {
+      AppState.filters.sort = e.target.value;
+      renderFilteredMatches();
     });
   }
 }
 
-function renderFilteredMatches() {
+function switchMatchesTab(tab) {
+  AppState.matchesTab = tab;
+
+  // Update tab button active state
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+
+  // Show/hide classic filters
+  const classicFilters = document.getElementById('classic-filters');
+  if (classicFilters) {
+    classicFilters.style.display = tab === 'classic' ? 'block' : 'none';
+  }
+
+  const content = document.getElementById('matches-tab-content');
+  if (!content) return;
+
+  switch (tab) {
+    case 'live':
+      renderLiveTab(content);
+      break;
+    case 'recent':
+      renderRecentTab(content);
+      break;
+    case 'upcoming':
+      renderUpcomingTab(content);
+      break;
+    case 'classic':
+    default:
+      renderClassicTab(content);
+      break;
+  }
+}
+
+function renderLiveTab(content) {
+  if (!CricAPI.isConfigured()) {
+    content.innerHTML = `
+      <div class="tab-empty-state">
+        <div class="empty-icon">📡</div>
+        <p>Connect your free CricketData.org API key to see live matches with real-time scores.</p>
+        <button class="btn btn-primary" onclick="openApiKeyModal()">Connect Live Data</button>
+      </div>
+    `;
+    return;
+  }
+
+  const liveMatches = AppState.apiLiveMatches;
+
+  if (liveMatches === null) {
+    // Loading state
+    content.innerHTML = `<div class="matches-grid">${renderSkeletonCards(6)}</div>`;
+    loadLiveMatches().then(() => {
+      if (AppState.matchesTab === 'live') {
+        const c = document.getElementById('matches-tab-content');
+        if (c) renderLiveTab(c);
+      }
+    });
+    return;
+  }
+
+  if (liveMatches.length === 0) {
+    content.innerHTML = `
+      <div class="tab-empty-state">
+        <div class="empty-icon">🏏</div>
+        <p>No live matches right now. Check back during match hours!</p>
+        <p style="font-size:0.8rem;margin-top:var(--space-sm)">Auto-refreshes every 60 seconds.</p>
+        <button class="btn btn-ghost btn-sm" onclick="manualRefresh()" style="margin-top:var(--space-md)">Refresh now</button>
+      </div>
+    `;
+    return;
+  }
+
+  content.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md)">
+      <p class="text-secondary" style="font-size:0.875rem">${liveMatches.length} match${liveMatches.length !== 1 ? 'es' : ''} currently in progress</p>
+      <button class="btn btn-ghost btn-sm" onclick="manualRefresh()">↺ Refresh</button>
+    </div>
+    <div class="matches-grid stagger-children" id="matches-grid">
+      ${liveMatches.map(m => renderMatchCard(m)).join('')}
+    </div>
+  `;
+  requestAnimationFrame(() => {
+    document.getElementById('matches-grid')?.classList.add('visible');
+  });
+}
+
+function renderRecentTab(content) {
+  if (!CricAPI.isConfigured()) {
+    content.innerHTML = `
+      <div class="tab-empty-state">
+        <div class="empty-icon">📡</div>
+        <p>Connect your free CricketData.org API key to see recently completed matches.</p>
+        <button class="btn btn-primary" onclick="openApiKeyModal()">Connect Live Data</button>
+      </div>
+    `;
+    return;
+  }
+
+  const recentMatches = AppState.apiRecentMatches;
+
+  if (recentMatches === null) {
+    content.innerHTML = `<div class="matches-grid">${renderSkeletonCards(6)}</div>`;
+    loadAllMatches().then(() => {
+      if (AppState.matchesTab === 'recent') {
+        const c = document.getElementById('matches-tab-content');
+        if (c) renderRecentTab(c);
+      }
+    });
+    return;
+  }
+
+  if (recentMatches.length === 0) {
+    content.innerHTML = `
+      <div class="tab-empty-state">
+        <div class="empty-icon">🏏</div>
+        <p>No recently completed matches found.</p>
+        <button class="btn btn-ghost btn-sm" onclick="manualRefresh()" style="margin-top:var(--space-md)">Refresh now</button>
+      </div>
+    `;
+    return;
+  }
+
+  content.innerHTML = `
+    <p class="text-secondary" style="font-size:0.875rem;margin-bottom:var(--space-md)">${recentMatches.length} recently completed matches</p>
+    <div class="matches-grid stagger-children" id="matches-grid">
+      ${recentMatches.map(m => renderMatchCard(m)).join('')}
+    </div>
+  `;
+  requestAnimationFrame(() => {
+    document.getElementById('matches-grid')?.classList.add('visible');
+  });
+}
+
+function renderUpcomingTab(content) {
+  if (!CricAPI.isConfigured()) {
+    content.innerHTML = `
+      <div class="tab-empty-state">
+        <div class="empty-icon">📡</div>
+        <p>Connect your free CricketData.org API key to see upcoming matches.</p>
+        <button class="btn btn-primary" onclick="openApiKeyModal()">Connect Live Data</button>
+      </div>
+    `;
+    return;
+  }
+
+  const upcomingMatches = AppState.apiUpcomingMatches;
+
+  if (upcomingMatches === null) {
+    content.innerHTML = `<div class="matches-grid">${renderSkeletonCards(6)}</div>`;
+    loadAllMatches().then(() => {
+      if (AppState.matchesTab === 'upcoming') {
+        const c = document.getElementById('matches-tab-content');
+        if (c) renderUpcomingTab(c);
+      }
+    });
+    return;
+  }
+
+  if (upcomingMatches.length === 0) {
+    content.innerHTML = `
+      <div class="tab-empty-state">
+        <div class="empty-icon">📅</div>
+        <p>No upcoming matches scheduled in the near future.</p>
+        <button class="btn btn-ghost btn-sm" onclick="manualRefresh()" style="margin-top:var(--space-md)">Refresh now</button>
+      </div>
+    `;
+    return;
+  }
+
+  content.innerHTML = `
+    <p class="text-secondary" style="font-size:0.875rem;margin-bottom:var(--space-md)">${upcomingMatches.length} upcoming matches</p>
+    <div class="matches-grid stagger-children" id="matches-grid">
+      ${upcomingMatches.map(m => renderMatchCard(m)).join('')}
+    </div>
+  `;
+  requestAnimationFrame(() => {
+    document.getElementById('matches-grid')?.classList.add('visible');
+  });
+}
+
+function renderClassicTab(content) {
   const filtered = filterMatches(MATCHES, AppState.filters);
   const sorted = sortMatches(filtered, AppState.filters.sort);
-  
+
+  content.innerHTML = `
+    <div class="matches-grid stagger-children" id="matches-grid">
+      ${sorted.map(m => renderMatchCard(m)).join('')}
+    </div>
+  `;
+  requestAnimationFrame(() => {
+    document.getElementById('matches-grid')?.classList.add('visible');
+  });
+}
+
+function renderFilteredMatches() {
+  if (AppState.matchesTab !== 'classic') return;
+  const content = document.getElementById('matches-tab-content');
+  if (!content) return;
+
+  const filtered = filterMatches(MATCHES, AppState.filters);
+  const sorted = sortMatches(filtered, AppState.filters.sort);
+
   const grid = document.getElementById('matches-grid');
-  if (!grid) return;
+  if (!grid) {
+    renderClassicTab(content);
+    return;
+  }
 
   grid.classList.remove('visible');
-  
   setTimeout(() => {
-    grid.innerHTML = sorted.length > 0 
+    grid.innerHTML = sorted.length > 0
       ? sorted.map(m => renderMatchCard(m)).join('')
       : '<p class="text-muted text-center" style="grid-column:1/-1;padding:var(--space-2xl)">No matches found matching your filters.</p>';
-    
     setTimeout(() => grid.classList.add('visible'), 50);
   }, 200);
 }
 
+
+// ============================================
+// API DATA LOADERS
+// ============================================
+async function loadLiveMatches() {
+  if (!CricAPI.isConfigured()) return;
+  showRefreshIndicator(true);
+  const result = await CricAPI.getCurrentMatches();
+  showRefreshIndicator(false);
+
+  if (result.error) {
+    if (result.error === 'INVALID_KEY') {
+      AppState.apiStatus = 'error';
+      CricAPI.setApiKey(null);
+    }
+    return;
+  }
+
+  if (result.data) {
+    AppState.apiLiveMatches = result.data.filter(m => m.status === 'live');
+    AppState.apiRecentMatches = result.data.filter(m => m.status === 'completed');
+    AppState.apiUpcomingMatches = result.data.filter(m => m.status === 'upcoming');
+    AppState.apiStatus = 'connected';
+  }
+  updateFooterApiStatus();
+}
+
+async function loadAllMatches() {
+  if (!CricAPI.isConfigured()) return;
+  showRefreshIndicator(true);
+
+  // Load currentMatches (has live) and matches (has completed + upcoming)
+  const [liveResult, allResult] = await Promise.all([
+    CricAPI.getCurrentMatches(),
+    CricAPI.getMatches(0)
+  ]);
+
+  showRefreshIndicator(false);
+
+  const liveData = (!liveResult.error && liveResult.data) ? liveResult.data : [];
+  const allData = (!allResult.error && allResult.data) ? allResult.data : [];
+
+  // Merge, preferring live data for duplicates
+  const seenIds = new Set();
+  const combined = [];
+  [...liveData, ...allData].forEach(m => {
+    if (!seenIds.has(m._apiId || m.id)) {
+      seenIds.add(m._apiId || m.id);
+      combined.push(m);
+    }
+  });
+
+  AppState.apiLiveMatches = combined.filter(m => m.status === 'live');
+  AppState.apiRecentMatches = combined.filter(m => m.status === 'completed');
+  AppState.apiUpcomingMatches = combined.filter(m => m.status === 'upcoming');
+  AppState.apiStatus = 'connected';
+
+  updateFooterApiStatus();
+}
+
+function showRefreshIndicator(isActive) {
+  const el = document.getElementById('refresh-indicator');
+  const label = document.getElementById('refresh-label');
+  if (!el) return;
+
+  if (isActive) {
+    el.style.display = 'flex';
+    el.className = 'refresh-indicator';
+    if (label) label.textContent = 'Refreshing...';
+  } else {
+    el.className = 'refresh-indicator idle';
+    if (label) label.textContent = 'Updated';
+    setTimeout(() => { if (el) el.style.display = 'none'; }, 2000);
+  }
+}
+
+async function manualRefresh() {
+  CricAPI.clearCache();
+  AppState.apiLiveMatches = null;
+  AppState.apiRecentMatches = null;
+  AppState.apiUpcomingMatches = null;
+
+  await loadAllMatches();
+
+  // Re-render current tab
+  if (AppState.currentPage === 'matches') {
+    const content = document.getElementById('matches-tab-content');
+    if (content) {
+      switch (AppState.matchesTab) {
+        case 'live':     renderLiveTab(content); break;
+        case 'recent':   renderRecentTab(content); break;
+        case 'upcoming': renderUpcomingTab(content); break;
+        default: break;
+      }
+    }
+  }
+
+  if (AppState.currentPage === 'home') {
+    renderLiveTicker();
+  }
+
+  showToast('Matches refreshed!', 'success');
+}
+
+
+// ============================================
+// AUTO-REFRESH (every 60 seconds for live matches)
+// ============================================
+function startLiveRefresh() {
+  stopLiveRefresh(); // clear any existing
+  AppState.liveRefreshTimer = setInterval(async () => {
+    if (!CricAPI.isConfigured()) return;
+
+    // Only hit the API if user is on matches page (live tab) or home
+    const shouldRefresh = AppState.currentPage === 'matches' || AppState.currentPage === 'home';
+    if (!shouldRefresh) return;
+
+    // Invalidate cache for live data only
+    CricAPI.cache.delete(`${CricAPI.BASE_URL}/currentMatches?apikey=${CricAPI.apiKey}&offset=0`);
+
+    await loadLiveMatches();
+
+    if (AppState.currentPage === 'home') {
+      renderLiveTicker();
+    }
+
+    if (AppState.currentPage === 'matches' && AppState.matchesTab === 'live') {
+      const content = document.getElementById('matches-tab-content');
+      if (content) renderLiveTab(content);
+    }
+  }, 60 * 1000);
+}
+
+function stopLiveRefresh() {
+  if (AppState.liveRefreshTimer) {
+    clearInterval(AppState.liveRefreshTimer);
+    AppState.liveRefreshTimer = null;
+  }
+}
+
+
+// ============================================
+// DIARY PAGE
+// ============================================
 function initDiaryPage() {
-  // Format chart
   const chartCanvas = document.getElementById('format-chart');
   if (chartCanvas && window.Chart) {
     const formatCounts = { Test: 0, ODI: 0, T20: 0 };
@@ -1314,7 +2105,6 @@ function initDiaryPage() {
     });
   }
 
-  // Diary format filters
   const filtersBar = document.getElementById('diary-filters');
   if (filtersBar) {
     filtersBar.querySelectorAll('.filter-btn[data-filter="format"]').forEach(btn => {
@@ -1322,7 +2112,7 @@ function initDiaryPage() {
         filtersBar.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         AppState.diaryFilters.format = btn.dataset.value;
-        
+
         let entries = AppState.userDiary;
         if (AppState.diaryFilters.format !== 'All') {
           entries = entries.filter(e => {
@@ -1330,7 +2120,7 @@ function initDiaryPage() {
             return match && match.format === AppState.diaryFilters.format;
           });
         }
-        
+
         const container = document.getElementById('diary-entries');
         if (container) {
           container.innerHTML = Pages.renderDiaryEntries(entries);
@@ -1341,7 +2131,7 @@ function initDiaryPage() {
 }
 
 function initProfilePage() {
-  // Animations are handled by scroll observer
+  // Animations handled by scroll observer
 }
 
 function initListsPage() {
@@ -1383,7 +2173,7 @@ function showToast(message, type = 'success') {
   toast.className = `toast ${type}`;
   toast.innerHTML = `
     <svg viewBox="0 0 20 20" width="16" height="16" fill="${type === 'success' ? 'var(--success)' : 'var(--warning)'}">
-      ${type === 'success' 
+      ${type === 'success'
         ? '<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/>'
         : '<path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"/>'}
     </svg>
@@ -1398,7 +2188,6 @@ function showToast(message, type = 'success') {
 // SCROLL ANIMATION OBSERVER
 // ============================================
 function observeScrollAnimations() {
-  // Small delay to ensure DOM is painted before observing
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       const observer = new IntersectionObserver(
@@ -1431,8 +2220,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initModals();
   Router.init();
 
+  // Update footer status initially
+  updateFooterApiStatus();
+
   // Nav background on scroll
-  let lastScroll = 0;
   window.addEventListener('scroll', () => {
     const nav = document.getElementById('main-nav');
     if (window.scrollY > 50) {
@@ -1440,6 +2231,5 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       nav.style.borderBottomColor = 'rgba(139, 148, 158, 0.08)';
     }
-    lastScroll = window.scrollY;
   });
 });

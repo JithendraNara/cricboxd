@@ -1,9 +1,323 @@
 /* ============================================
    CricBoxd — Live API Layer
-   CricketData.org (api.cricapi.com) Integration
+   Dual-source: ESPN Cricinfo RSS (zero-config) +
+   CricketData.org (optional upgrade)
    ============================================ */
 
 const CricAPI = {
+
+  // ============================================
+  // PRIMARY SOURCE: ESPN Cricinfo RSS (zero-config)
+  // ============================================
+  RSS_URL: 'https://api.rss2json.com/v1/api.json?rss_url=https://static.cricinfo.com/rss/livescores.xml',
+  RSS_CACHE_TTL: 30 * 1000, // 30 seconds
+  _rssCache: null,
+  _rssCacheTime: 0,
+
+  // Fallback sample data shown when rss2json.com is unreachable
+  RSS_FALLBACK: [
+    {
+      id: 'rss_fallback_1',
+      team1: 'India', team1Code: 'IND',
+      team2: 'Australia', team2Code: 'AUS',
+      score1: '287/4', score2: '215/8',
+      score1Innings: ['287/4'], score2Innings: ['215/8'],
+      battingTeam: 1,
+      status: 'live',
+      result: 'India 287/4 · Australia 215/8',
+      format: 'T20',
+      date: new Date().toISOString().substring(0, 10),
+      venue: 'Venue TBA',
+      tournamentName: 'Sample Data — RSS unavailable',
+      communityRating: 0,
+      totalLogs: 0,
+      tags: [],
+      watchLinks: [],
+      topScorer: null,
+      bestBowler: null,
+      potm: null,
+      espnLink: null,
+      _source: 'fallback'
+    },
+    {
+      id: 'rss_fallback_2',
+      team1: 'England', team1Code: 'ENG',
+      team2: 'New Zealand', team2Code: 'NZ',
+      score1: '—', score2: '—',
+      score1Innings: [], score2Innings: [],
+      battingTeam: null,
+      status: 'upcoming',
+      result: 'Match upcoming',
+      format: 'ODI',
+      date: new Date().toISOString().substring(0, 10),
+      venue: 'Venue TBA',
+      tournamentName: 'Sample Data — RSS unavailable',
+      communityRating: 0,
+      totalLogs: 0,
+      tags: [],
+      watchLinks: [],
+      topScorer: null,
+      bestBowler: null,
+      potm: null,
+      espnLink: null,
+      _source: 'fallback'
+    }
+  ],
+
+  /**
+   * Fetch live scores from ESPN Cricinfo RSS via rss2json.com.
+   * Returns an array of normalized match objects.
+   * Caches for 30 seconds. Falls back to sample data on error.
+   */
+  async fetchLiveScores() {
+    // Return from cache if fresh
+    if (this._rssCache && (Date.now() - this._rssCacheTime) < this.RSS_CACHE_TTL) {
+      return { data: this._rssCache, fromCache: true, error: null, source: 'rss' };
+    }
+
+    try {
+      const response = await fetch(this.RSS_URL);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const json = await response.json();
+
+      if (!json || json.status !== 'ok' || !Array.isArray(json.items)) {
+        throw new Error('Invalid RSS response');
+      }
+
+      const matches = json.items
+        .map(item => this.parseRssMatch(item))
+        .filter(Boolean);
+
+      this._rssCache = matches;
+      this._rssCacheTime = Date.now();
+
+      return { data: matches, fromCache: false, error: null, source: 'rss' };
+    } catch (err) {
+      // Return fallback data so the app still renders
+      return {
+        data: this.RSS_FALLBACK,
+        fromCache: false,
+        error: err.message || 'RSS_FETCH_ERROR',
+        source: 'fallback'
+      };
+    }
+  },
+
+  /**
+   * Force-invalidate the RSS cache so the next fetchLiveScores() hits the network.
+   */
+  clearRssCache() {
+    this._rssCache = null;
+    this._rssCacheTime = 0;
+  },
+
+  /**
+   * Parse a single rss2json item into a normalized CricBoxd match object.
+   *
+   * Handles:
+   *   "England 161/6 * v New Zealand 159/7"          — live
+   *   "Karnataka 293/10 & 186/4 * v J&K 584/10"     — Test multi-innings
+   *   "Sri Lanka v Pakistan"                          — upcoming
+   *
+   * Returns null for unparseable items.
+   */
+  parseRssMatch(item) {
+    if (!item || !item.title) return null;
+
+    // Decode HTML entities (&amp; → &, etc.)
+    const raw = this._decodeHtml(item.title);
+
+    // Split on " v " (with spaces on both sides)
+    const vIdx = raw.indexOf(' v ');
+    if (vIdx === -1) return null;
+
+    const part1 = raw.substring(0, vIdx).trim();   // team1 side
+    const part2 = raw.substring(vIdx + 3).trim();  // team2 side
+
+    // --- Parse each side: extract team name, innings scores, batting marker ---
+    const side1 = this._parseSide(part1);
+    const side2 = this._parseSide(part2);
+
+    if (!side1 || !side2) return null;
+
+    // Determine batting team (1 or 2 or null)
+    let battingTeam = null;
+    if (side1.isBatting) battingTeam = 1;
+    else if (side2.isBatting) battingTeam = 2;
+
+    // Status: if either side has scores → live; else upcoming
+    const hasScores = side1.innings.length > 0 || side2.innings.length > 0;
+    const status = hasScores ? 'live' : 'upcoming';
+
+    // Score strings for display (latest innings only, or all innings joined with " & ")
+    const score1 = side1.innings.length > 0 ? side1.innings.join(' & ') : '—';
+    const score2 = side2.innings.length > 0 ? side2.innings.join(' & ') : '—';
+
+    // Extract match ID and build ESPN link
+    let matchId = null;
+    let espnLink = null;
+    if (item.link) {
+      const m = item.link.match(/\/match\/(\d+)/);
+      if (m) {
+        matchId = m[1];
+        espnLink = `https://www.espncricinfo.com/ci/engine/match/${matchId}.html`;
+      } else {
+        // Fallback: grab number before .html in any form
+        const m2 = item.link.match(/(\d{6,})/);
+        if (m2) {
+          matchId = m2[1];
+          espnLink = `https://www.espncricinfo.com/ci/engine/match/${matchId}.html`;
+        }
+      }
+    }
+    if (!espnLink && item.guid) {
+      const m3 = item.guid.match(/\/(\d{6,})\./);
+      if (m3) {
+        matchId = m3[1];
+        espnLink = `https://www.espncricinfo.com/ci/engine/match/${matchId}.html`;
+      }
+    }
+
+    const id = matchId ? `rss_${matchId}` : `rss_${Math.random().toString(36).slice(2)}`;
+
+    // Build a human-readable result string
+    let result;
+    if (status === 'upcoming') {
+      result = 'Match upcoming';
+    } else if (battingTeam === 1) {
+      result = `${side1.teamName} batting`;
+    } else if (battingTeam === 2) {
+      result = `${side2.teamName} batting`;
+    } else {
+      result = 'In progress';
+    }
+
+    return {
+      id,
+      team1: side1.teamName,
+      team1Code: this._teamCode(side1.teamName),
+      team2: side2.teamName,
+      team2Code: this._teamCode(side2.teamName),
+      score1,
+      score2,
+      // Keep individual innings arrays for potential future use
+      score1Innings: side1.innings,
+      score2Innings: side2.innings,
+      battingTeam,
+      status,
+      result,
+      format: this._guessFormat(side1.innings, side2.innings),
+      date: new Date().toISOString().substring(0, 10),
+      venue: 'Venue TBA',
+      tournamentName: '',
+      espnLink,
+      matchId,
+      // Community fields — no data yet for live matches
+      communityRating: 0,
+      totalLogs: 0,
+      tags: [],
+      watchLinks: espnLink ? [espnLink] : [],
+      topScorer: null,
+      bestBowler: null,
+      potm: null,
+      _source: 'rss',
+      _raw: item
+    };
+  },
+
+  /**
+   * Parse one side of a score string, e.g.:
+   *   "England 161/6 *"          → { teamName: "England", innings: ["161/6"], isBatting: true }
+   *   "Karnataka 293/10 & 186/4 *" → { teamName: "Karnataka", innings: ["293/10","186/4"], isBatting: true }
+   *   "Sri Lanka"                 → { teamName: "Sri Lanka", innings: [], isBatting: false }
+   */
+  _parseSide(str) {
+    if (!str) return null;
+
+    const isBatting = str.includes('*');
+    // Remove the batting marker
+    let s = str.replace(/\*/g, '').trim();
+
+    // A score token looks like: digits/digits (e.g. "293/10", "161/6")
+    // We'll split by " & " after extracting the team name prefix
+
+    // Strategy: walk right-to-left, collect score tokens separated by " & "
+    // Everything before the first score token is the team name
+
+    // Split on " & " to separate potential multi-innings
+    const parts = s.split(/\s*&\s*/);
+
+    const innings = [];
+    let teamParts = [];
+
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i].trim();
+      if (i === 0) {
+        // First part may be "TeamName 293/10" or just "TeamName"
+        const scoreMatch = p.match(/^(.*?)\s+(\d+\/\d+)\s*$/);
+        if (scoreMatch) {
+          teamParts.push(scoreMatch[1].trim());
+          innings.push(scoreMatch[2]);
+        } else {
+          // No score in this part — the entire string is the team name
+          teamParts.push(p);
+        }
+      } else {
+        // Subsequent parts after "&" should be pure scores like "186/4"
+        const pureScore = p.match(/^(\d+\/\d+)$/);
+        if (pureScore) {
+          innings.push(pureScore[1]);
+        } else {
+          // Could be "TeamName score" if the team name contains & — handle gracefully
+          const scoreMatch = p.match(/^(.*?)\s+(\d+\/\d+)\s*$/);
+          if (scoreMatch) {
+            innings.push(scoreMatch[2]);
+          }
+        }
+      }
+    }
+
+    const teamName = teamParts.join(' & ').trim();
+    if (!teamName) return null;
+
+    return { teamName, innings, isBatting };
+  },
+
+  /**
+   * Decode common HTML entities in a string.
+   */
+  _decodeHtml(str) {
+    return str
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ');
+  },
+
+  /**
+   * Guess format from innings scores.
+   * Tests have multiple innings with high scores; T20s rarely exceed ~250;
+   * ODIs cap at 50 overs.  We can't be certain from RSS, so default to 'LIVE'.
+   */
+  _guessFormat(innings1, innings2) {
+    const allInnings = [...innings1, ...innings2];
+    if (allInnings.length >= 3) return 'Test'; // multi-innings strongly implies Test
+    // Check for >300 in any innings — likely Test/ODI
+    const hasHighScore = allInnings.some(score => {
+      const runs = parseInt(score.split('/')[0], 10);
+      return runs > 300;
+    });
+    if (hasHighScore) return 'Test';
+    return 'T20'; // Default: most live matches are T20
+  },
+
+  // ============================================
+  // SECONDARY SOURCE: CricketData.org (optional)
+  // ============================================
   apiKey: null,
   cache: new Map(),
   CACHE_TTL: 5 * 60 * 1000, // 5 minutes
@@ -70,7 +384,7 @@ const CricAPI = {
     }
   },
 
-  // ---- Clear cache (force refresh) ----
+  // ---- Clear CricketData.org cache ----
 
   clearCache() {
     this.cache.clear();
@@ -114,7 +428,7 @@ const CricAPI = {
     return this.fetchEndpoint('series', { offset });
   },
 
-  // ---- Normalize API match to CricBoxd format ----
+  // ---- Normalize CricketData.org match → CricBoxd format ----
 
   normalizeMatch(apiMatch, forceStatus) {
     if (!apiMatch) return null;
@@ -197,9 +511,13 @@ const CricAPI = {
       topScorer: null,
       bestBowler: null,
       potm: null,
+      espnLink: null,
+      _source: 'cricketdata',
       _raw: apiMatch
     };
   },
+
+  // ---- Helper: derive a short team code ----
 
   _teamCode(name) {
     if (!name) return '???';
@@ -211,6 +529,8 @@ const CricAPI = {
       'AFGHANISTAN': 'AFG', 'ZIMBABWE': 'ZIM', 'IRELAND': 'IRE',
       'SCOTLAND': 'SCO', 'UAE': 'UAE', 'NAMIBIA': 'NAM',
       'NEPAL': 'NEP', 'OMAN': 'OMA', 'USA': 'USA',
+      'HONG KONG': 'HK', 'KUWAIT': 'KUW', 'KENYA': 'KEN',
+      'INDONESIA': 'IDN', 'SINGAPORE': 'SIN', 'MALAYSIA': 'MAS',
       'CHENNAI SUPER KINGS': 'CSK', 'MUMBAI INDIANS': 'MI',
       'ROYAL CHALLENGERS BENGALURU': 'RCB', 'ROYAL CHALLENGERS BANGALORE': 'RCB',
       'KOLKATA KNIGHT RIDERS': 'KKR', 'SUNRISERS HYDERABAD': 'SRH',
@@ -224,6 +544,8 @@ const CricAPI = {
     if (words.length === 2) return (words[0][0] + words[1].substring(0, 2)).toUpperCase();
     return words.map(w => w[0]).join('').substring(0, 3).toUpperCase();
   },
+
+  // ---- Error message helpers ----
 
   getErrorMessage(errorCode) {
     switch (errorCode) {

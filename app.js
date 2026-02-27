@@ -136,7 +136,7 @@ function renderStumpRatingInput(currentRating = 0) {
       <div class="stump-wood"></div>
     </div>`;
   }
-  html += `<span class="rating-number" style="margin-left:12px;font-size:1.1rem">${currentRating > 0 ? currentRating.toFixed(1) : '\u2014'}</span>`;
+  html += `<span class="rating-number" style="margin-left:12px;font-size:1.1rem">${currentRating > 0 ? currentRating.toFixed(1) : '—'}</span>`;
   html += '</div>';
   return html;
 }
@@ -145,13 +145,14 @@ function renderStumpRatingInput(currentRating = 0) {
 // COMPONENT: Match Card (supports both sample & API matches)
 // ============================================
 function renderMatchCard(match) {
+  const isRssMatch = match.id && match.id.startsWith('rss_');
   const isApiMatch = match.id && match.id.startsWith('api_');
+  const isExternalMatch = isRssMatch || isApiMatch;
   const isLive = match.status === 'live';
   const isUpcoming = match.status === 'upcoming';
 
   let team1, team2;
-  if (isApiMatch) {
-    // API match uses full team names directly
+  if (isExternalMatch) {
     team1 = { name: match.team1, short: match.team1Code || match.team1.substring(0,3).toUpperCase(), color: '#8b949e' };
     team2 = { name: match.team2, short: match.team2Code || match.team2.substring(0,3).toUpperCase(), color: '#8b949e' };
   } else {
@@ -159,11 +160,11 @@ function renderMatchCard(match) {
     team2 = getTeam(match.team2);
   }
 
-  const tournament = isApiMatch
+  const tournament = isExternalMatch
     ? null
     : getTournament(match.tournament);
 
-  const tournamentLabel = isApiMatch
+  const tournamentLabel = isExternalMatch
     ? (match.tournamentName || '')
     : (tournament?.name || '');
 
@@ -178,12 +179,23 @@ function renderMatchCard(match) {
   // Card class
   const cardClass = isLive ? 'match-card live' : (isUpcoming ? 'match-card upcoming' : 'match-card');
 
-  // Score display — handle spoiler shield
-  const score1Html = (match.score1 && match.score1 !== 'N/A') ? match.score1 : (isUpcoming ? '\u2014' : '\u2014');
-  const score2Html = (match.score2 && match.score2 !== 'N/A') ? match.score2 : (isUpcoming ? '\u2014' : '\u2014');
+  // Score display
+  const score1Html = (match.score1 && match.score1 !== 'N/A') ? match.score1 : '—';
+  const score2Html = (match.score2 && match.score2 !== 'N/A') ? match.score2 : '—';
 
   // Date
   const dateStr = match.date ? formatDate(match.date) : '';
+
+  // Batting indicator for RSS matches (red dot on currently batting team)
+  let battingIndicator1 = '';
+  let battingIndicator2 = '';
+  if (isRssMatch && match.battingTeam === 1) battingIndicator1 = ' <span style="color:#e74c3c;font-size:0.65rem">●</span>';
+  if (isRssMatch && match.battingTeam === 2) battingIndicator2 = ' <span style="color:#e74c3c;font-size:0.65rem">●</span>';
+
+  // ESPN Cricinfo external link for RSS matches
+  const espnLinkHtml = (isRssMatch && match.espnLink)
+    ? `<a class="match-card-external-link" href="${match.espnLink}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">View on Cricinfo ↗</a>`
+    : '';
 
   return `
     <div class="${cardClass}" data-match-id="${match.id}" onclick="openMatchDetail('${match.id}')">
@@ -198,14 +210,14 @@ function renderMatchCard(match) {
         <div class="match-card-team">
           <span class="team-name">
             <span class="team-flag" style="color:${team1.color}">${team1.short.substring(0,3)}</span>
-            ${team1.name}
+            ${team1.name}${battingIndicator1}
           </span>
           <span class="team-score">${score1Html}</span>
         </div>
         <div class="match-card-team">
           <span class="team-name">
             <span class="team-flag" style="color:${team2.color}">${team2.short.substring(0,3)}</span>
-            ${team2.name}
+            ${team2.name}${battingIndicator2}
           </span>
           <span class="team-score">${score2Html}</span>
         </div>
@@ -214,10 +226,15 @@ function renderMatchCard(match) {
       ${tournamentLabel ? `<div class="match-card-tournament">${tournamentLabel}</div>` : ''}
       <div class="match-card-footer">
         <div class="match-card-rating">
-          ${match.communityRating > 0 ? renderStumpRating(match.communityRating) : (isApiMatch ? '<span style="font-size:0.75rem;color:var(--text-muted)">No ratings yet</span>' : renderStumpRating(0))}
+          ${match.communityRating > 0
+            ? renderStumpRating(match.communityRating)
+            : (isExternalMatch
+                ? '<span style="font-size:0.75rem;color:var(--text-muted)">No ratings yet</span>'
+                : renderStumpRating(0))}
         </div>
-        <span class="match-card-logs">${match.totalLogs > 0 ? match.totalLogs.toLocaleString() + ' logs' : (isApiMatch ? 'Live data' : '0 logs')}</span>
+        <span class="match-card-logs">${match.totalLogs > 0 ? match.totalLogs.toLocaleString() + ' logs' : (isExternalMatch ? 'Live data' : '0 logs')}</span>
       </div>
+      ${espnLinkHtml ? `<div style="padding:0 var(--space-lg) var(--space-sm)">${espnLinkHtml}</div>` : ''}
     </div>
   `;
 }
@@ -282,7 +299,8 @@ const Pages = {
 
     return `
       <div class="home-page">
-        ${!AppState.bannerDismissed && !CricAPI.isConfigured() ? this.renderSetupBanner() : ''}
+        <!-- ESPN Cricinfo source bar (replaces old setup banner) -->
+        ${this.renderSourceBar()}
 
         <!-- LIVE TICKER placeholder — populated by initHomePage() -->
         <div id="live-ticker-container"></div>
@@ -362,14 +380,15 @@ const Pages = {
     `;
   },
 
-  renderSetupBanner() {
+  renderSourceBar() {
+    if (AppState.bannerDismissed) return '';
     return `
-      <div class="api-setup-banner" id="api-setup-banner">
-        <div class="api-setup-banner-text">
+      <div class="live-source-bar" id="live-source-bar">
+        <div class="live-source-bar-text">
           <span class="live-dot"></span>
-          <span>Get <strong>real-time live cricket scores</strong> — connect your free CricketData.org API key</span>
+          <span>Live scores powered by <strong>ESPN Cricinfo</strong> — updates every 30 seconds, no setup needed</span>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="openApiKeyModal()">Connect Live Data</button>
+        <button class="btn btn-ghost btn-sm" onclick="openApiKeyModal()" style="font-size:0.75rem;padding:4px 12px">Upgrade: Get More Data</button>
         <button class="api-banner-dismiss" onclick="dismissBanner()" title="Dismiss">&times;</button>
       </div>
     `;
@@ -386,7 +405,7 @@ const Pages = {
           <div class="container">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:var(--space-md);margin-bottom:var(--space-lg)">
               <h1 class="section-title" style="margin-bottom:0">Matches</h1>
-              <div style="display:flex;align-items:center;gap:var(--space-sm)">
+              <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
                 <span id="refresh-indicator" class="refresh-indicator idle" style="display:none">
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
@@ -394,7 +413,7 @@ const Pages = {
                   </svg>
                   <span id="refresh-label">Refreshing...</span>
                 </span>
-                ${renderApiStatusBadge()}
+                <span id="matches-api-status">${renderApiStatusBadge()}</span>
               </div>
             </div>
 
@@ -961,17 +980,39 @@ function renderApiMatchDetail(match, container) {
   const t2Name = match.team2;
   const isLive = match.status === 'live';
   const isUpcoming = match.status === 'upcoming';
+  const isRssMatch = match._source === 'rss' || (match.id && match.id.startsWith('rss_'));
 
   const statusHtml = isLive
     ? '<span class="live-badge" style="font-size:0.75rem;padding:4px 12px">LIVE</span>'
     : (isUpcoming ? '<span class="match-status-badge upcoming">Upcoming</span>' : '<span class="match-status-badge completed">Completed</span>');
 
+  // ESPN link for RSS matches
+  const espnLinkHtml = (isRssMatch && match.espnLink)
+    ? `<div class="text-center" style="margin-top:var(--space-md)">
+         <a class="match-card-external-link" href="${match.espnLink}" target="_blank" rel="noopener noreferrer">
+           View full details on ESPN Cricinfo ↗
+         </a>
+       </div>`
+    : '';
+
+  // Source notice
+  const sourceNotice = isRssMatch
+    ? `<div class="api-match-notice">
+         <svg viewBox="0 0 20 20" width="14" height="14" fill="var(--amber)"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zM9 7h2v2H9V7zm0 4h2v4H9v-4z"/></svg>
+         Live data via ESPN Cricinfo — community ratings unavailable for live matches
+       </div>`
+    : `<div class="api-match-notice">
+         <svg viewBox="0 0 20 20" width="14" height="14" fill="var(--amber)"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zM9 7h2v2H9V7zm0 4h2v4H9v-4z"/></svg>
+         Live data from CricketData.org — community ratings unavailable for live matches
+       </div>`;
+
+  // Score display with batting indicator for RSS matches
+  const battingHtml1 = (isRssMatch && match.battingTeam === 1) ? ' <span style="color:#e74c3c">●</span>' : '';
+  const battingHtml2 = (isRssMatch && match.battingTeam === 2) ? ' <span style="color:#e74c3c">●</span>' : '';
+
   container.innerHTML = `
     <div class="match-detail">
-      <div class="api-match-notice">
-        <svg viewBox="0 0 20 20" width="14" height="14" fill="var(--amber)"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zM9 7h2v2H9V7zm0 4h2v4H9v-4z"/></svg>
-        Live data from CricketData.org — community ratings unavailable for live matches
-      </div>
+      ${sourceNotice}
 
       <!-- HEADER -->
       <div class="match-detail-header">
@@ -985,28 +1026,29 @@ function renderApiMatchDetail(match, container) {
 
         <div class="match-detail-scores">
           <div class="match-detail-team">
-            <div class="team-name">${t1Name}</div>
-            <div class="team-score">${match.score1 !== 'N/A' ? match.score1 : '—'}</div>
+            <div class="team-name">${t1Name}${battingHtml1}</div>
+            <div class="team-score">${(match.score1 && match.score1 !== 'N/A') ? match.score1 : '—'}</div>
           </div>
           <div class="match-detail-vs">vs</div>
           <div class="match-detail-team">
-            <div class="team-name">${t2Name}</div>
-            <div class="team-score">${match.score2 !== 'N/A' ? match.score2 : '—'}</div>
+            <div class="team-name">${t2Name}${battingHtml2}</div>
+            <div class="team-score">${(match.score2 && match.score2 !== 'N/A') ? match.score2 : '—'}</div>
           </div>
         </div>
 
         <div class="match-result">${match.result}</div>
+        ${espnLinkHtml}
       </div>
 
       <!-- LOG BUTTON -->
       <div class="text-center mb-xl">
         <button class="btn btn-primary" onclick="openLogModal('${match.id}')">
-          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor"><path d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/></svg>
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor"><path d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 110-2h5V4a1 1 0 011-1z"/></svg>
           Log This Match
         </button>
       </div>
 
-      <!-- VENUE INFO -->
+      <!-- MATCH INFO -->
       <div class="match-stats-grid">
         <div class="match-stat-card">
           <div class="match-stat-label">Format</div>
@@ -1084,16 +1126,23 @@ function openLogModal(matchId) {
   const container = document.getElementById('log-form-container');
   const today = new Date().toISOString().split('T')[0];
 
-  // Build match options: sample data + any loaded API matches (using display name)
+  // Build match options: sample data + RSS live matches + CricketData.org matches
+  const rssMatches = AppState.rssLiveMatches || [];
   const apiMatches = [
     ...(AppState.apiLiveMatches || []),
     ...(AppState.apiRecentMatches || []),
     ...(AppState.apiUpcomingMatches || [])
   ];
 
+  const rssOptions = rssMatches.map(m => {
+    const selected = m.id === matchId ? 'selected' : '';
+    const label = m.status === 'live' ? 'LIVE' : 'Upcoming';
+    return `<option value="${m.id}" ${selected}>${m.team1} vs ${m.team2} — Today (${m.format}) [${label} · Cricinfo]</option>`;
+  });
+
   const apiOptions = apiMatches.map(m => {
     const selected = m.id === matchId ? 'selected' : '';
-    return `<option value="${m.id}" ${selected}>${m.team1} vs ${m.team2} — ${m.date ? formatDate(m.date) : 'Live'} (${m.format}) [Live]</option>`;
+    return `<option value="${m.id}" ${selected}>${m.team1} vs ${m.team2} — ${m.date ? formatDate(m.date) : 'Live'} (${m.format}) [CricketData.org]</option>`;
   });
 
   container.innerHTML = `
@@ -1109,7 +1158,8 @@ function openLogModal(matchId) {
             const selected = m.id === matchId ? 'selected' : '';
             return `<option value="${m.id}" ${selected}>${t1.name} vs ${t2.name} — ${formatDate(m.date)} (${m.format})</option>`;
           }).join('')}
-          ${apiOptions.length > 0 ? `<optgroup label="\u2500\u2500 Live / Recent from API \u2500\u2500">${apiOptions.join('')}</optgroup>` : ''}
+          ${rssOptions.length > 0 ? `<optgroup label="── Live Now · ESPN Cricinfo ──">${rssOptions.join('')}</optgroup>` : ''}
+          ${apiOptions.length > 0 ? `<optgroup label="── Live / Recent · CricketData.org ──">${apiOptions.join('')}</optgroup>` : ''}
         </select>
       </div>
 
@@ -1359,8 +1409,9 @@ function initSearch() {
       return searchStr.includes(query);
     }).slice(0, 5);
 
-    // Search API matches
+    // Search live matches (RSS + API)
     const apiMatchPool = [
+      ...(AppState.rssLiveMatches || []),
       ...(AppState.apiLiveMatches || []),
       ...(AppState.apiRecentMatches || []),
       ...(AppState.apiUpcomingMatches || [])
@@ -1391,12 +1442,13 @@ function initSearch() {
     });
 
     apiMatchResults.forEach(m => {
+      const isRss = m._source === 'rss' || (m.id && m.id.startsWith('rss_'));
       html += `
         <div class="search-result-item" onclick="document.getElementById('search-overlay').classList.add('hidden');openMatchDetail('${m.id}')">
-          <span class="search-result-type" style="background:rgba(231,76,60,0.1);color:#e74c3c;border:1px solid rgba(231,76,60,0.2)">Live</span>
+          <span class="search-result-type" style="background:rgba(231,76,60,0.1);color:#e74c3c;border:1px solid rgba(231,76,60,0.2)">${isRss ? 'Live' : 'API'}</span>
           <div>
             <div class="search-result-text">${m.team1} vs ${m.team2}</div>
-            <div class="search-result-meta">${m.format} · ${m.status} · ${m.venue ? m.venue.split(',')[0] : ''}</div>
+            <div class="search-result-meta">${m.format} · ${m.status}${isRss ? ' · ESPN Cricinfo' : ''}</div>
           </div>
         </div>
       `;
@@ -1568,7 +1620,7 @@ async function saveApiKey() {
     CricAPI.setApiKey(null);
     AppState.apiStatus = 'error';
     btn.disabled = false;
-    btn.textContent = 'Connect & Load Live Matches';
+    btn.textContent = 'Connect & Load Extra Data';
     return;
   }
 
@@ -1576,13 +1628,13 @@ async function saveApiKey() {
     statusEl.className = 'api-key-status error';
     statusEl.textContent = `✗ ${CricAPI.getErrorMessage(result.error)}`;
     btn.disabled = false;
-    btn.textContent = 'Connect & Load Live Matches';
+    btn.textContent = 'Connect & Load Extra Data';
     return;
   }
 
   // Success
   statusEl.className = 'api-key-status connected';
-  statusEl.textContent = '✓ Connected! Loading live matches...';
+  statusEl.textContent = '✓ Connected! Loading extra data...';
   AppState.apiStatus = 'connected';
 
   // Store live data
@@ -1600,39 +1652,33 @@ async function saveApiKey() {
     document.getElementById('api-key-modal').classList.add('hidden');
     document.body.style.overflow = '';
     btn.disabled = false;
-    btn.textContent = 'Connect & Load Live Matches';
+    btn.textContent = 'Connect & Load Extra Data';
 
-    // Dismiss setup banner
-    AppState.bannerDismissed = true;
-    const banner = document.getElementById('api-setup-banner');
-    if (banner) banner.style.display = 'none';
+    showToast('CricketData.org connected! Extra data unlocked.', 'success');
 
-    showToast('Live cricket data connected!', 'success');
-
-    // If on matches page, switch to live tab
+    // If on matches page, refresh current tab
     if (AppState.currentPage === 'matches') {
-      switchMatchesTab('live');
+      switchMatchesTab(AppState.matchesTab);
     }
     // If on home, refresh live ticker
     if (AppState.currentPage === 'home') {
       renderLiveTicker();
     }
-
-    // Start auto-refresh
-    startLiveRefresh();
   }, 1000);
 }
 
 function dismissBanner() {
   AppState.bannerDismissed = true;
-  const banner = document.getElementById('api-setup-banner');
-  if (banner) banner.style.display = 'none';
+  const bar = document.getElementById('live-source-bar');
+  if (bar) bar.style.display = 'none';
 }
 
 function updateFooterApiStatus() {
   const el = document.getElementById('footer-api-status');
-  if (!el) return;
-  el.innerHTML = renderApiStatusBadge();
+  if (el) el.innerHTML = renderApiStatusBadge();
+  // Also update the matches page status badge if present
+  const matchesEl = document.getElementById('matches-api-status');
+  if (matchesEl) matchesEl.innerHTML = renderApiStatusBadge();
 }
 
 
@@ -1640,25 +1686,57 @@ function updateFooterApiStatus() {
 // HOME PAGE INIT — Live ticker
 // ============================================
 function initHomePage() {
-  renderLiveTicker();
   updateFooterApiStatus();
+  // Immediately start RSS fetch if not already loaded
+  if (AppState.rssLiveMatches === null) {
+    loadRssLiveScores().then(() => {
+      renderLiveTicker();
+      refreshHomeLiveSection();
+    });
+  } else {
+    renderLiveTicker();
+  }
+}
+
+/**
+ * Blend live RSS matches into the trending section on the home page.
+ */
+function refreshHomeLiveSection() {
+  const liveMatches = AppState.rssLiveMatches || [];
+  const onlyLive = liveMatches.filter(m => m.status === 'live').slice(0, 3);
+  if (onlyLive.length === 0) return;
+
+  const trendingSection = document.querySelector('.trending-section .matches-grid');
+  if (!trendingSection) return;
+
+  const sampleCards = sortMatches(MATCHES, 'rating').slice(0, 3);
+  trendingSection.innerHTML = [...onlyLive, ...sampleCards].map(m => renderMatchCard(m)).join('');
 }
 
 function renderLiveTicker() {
   const container = document.getElementById('live-ticker-container');
   if (!container) return;
 
-  const liveMatches = AppState.apiLiveMatches;
-  if (!liveMatches || liveMatches.length === 0) {
+  const rssLive = (AppState.rssLiveMatches || []).filter(m => m.status === 'live');
+  const apiLive = AppState.apiLiveMatches || [];
+
+  // Merge without duplicates
+  const seen = new Set();
+  const liveMatches = [];
+  [...rssLive, ...apiLive].forEach(m => {
+    if (!seen.has(m.id)) { seen.add(m.id); liveMatches.push(m); }
+  });
+
+  if (liveMatches.length === 0) {
     container.innerHTML = '';
     return;
   }
 
-  // Duplicate items for seamless loop
+  // Duplicate items for seamless scroll loop
   const items = [...liveMatches, ...liveMatches].map(m => `
     <span class="live-ticker-item" onclick="openMatchDetail('${m.id}')">
       <span class="live-ticker-teams">${m.team1} vs ${m.team2}</span>
-      <span class="live-ticker-score">${m.score1 !== 'N/A' ? m.score1 : ''} ${m.score2 !== 'N/A' ? '· ' + m.score2 : ''}</span>
+      <span class="live-ticker-score">${m.score1 && m.score1 !== '—' ? m.score1 : ''} ${m.score2 && m.score2 !== '—' ? '· ' + m.score2 : ''}</span>
       <span class="live-ticker-status">${m.result}</span>
     </span>
   `).join('');
@@ -1678,6 +1756,18 @@ function renderLiveTicker() {
 // MATCHES PAGE — Tab logic + API loading
 // ============================================
 function initMatchesPage() {
+  // Load RSS live scores immediately if not cached
+  if (AppState.rssLiveMatches === null) {
+    loadRssLiveScores().then(() => {
+      if (AppState.matchesTab === 'live') {
+        const c = document.getElementById('matches-tab-content');
+        if (c) renderLiveTab(c);
+      }
+      const statusEl = document.getElementById('matches-api-status');
+      if (statusEl) statusEl.innerHTML = renderApiStatusBadge();
+    });
+  }
+
   // Render the current tab
   switchMatchesTab(AppState.matchesTab);
 
@@ -1742,23 +1832,14 @@ function switchMatchesTab(tab) {
 }
 
 function renderLiveTab(content) {
-  if (!CricAPI.isConfigured()) {
-    content.innerHTML = `
-      <div class="tab-empty-state">
-        <div class="empty-icon">📡</div>
-        <p>Connect your free CricketData.org API key to see live matches with real-time scores.</p>
-        <button class="btn btn-primary" onclick="openApiKeyModal()">Connect Live Data</button>
-      </div>
-    `;
-    return;
-  }
+  // RSS is the zero-config primary source — no API key required
+  const rssMatches = AppState.rssLiveMatches;
+  const apiMatches = AppState.apiLiveMatches || [];
 
-  const liveMatches = AppState.apiLiveMatches;
-
-  if (liveMatches === null) {
-    // Loading state
+  // Still loading RSS for the first time
+  if (rssMatches === null) {
     content.innerHTML = `<div class="matches-grid">${renderSkeletonCards(6)}</div>`;
-    loadLiveMatches().then(() => {
+    loadRssLiveScores().then(() => {
       if (AppState.matchesTab === 'live') {
         const c = document.getElementById('matches-tab-content');
         if (c) renderLiveTab(c);
@@ -1767,25 +1848,37 @@ function renderLiveTab(content) {
     return;
   }
 
-  if (liveMatches.length === 0) {
+  // Merge RSS + API matches, deduplicate by id
+  const seen = new Set();
+  const allLive = [];
+  for (const m of [...rssMatches, ...apiMatches]) {
+    if (!seen.has(m.id)) { seen.add(m.id); allLive.push(m); }
+  }
+
+  // Attribution badge
+  const sourceLabel = AppState.rssStatus === 'fallback'
+    ? `<span class="live-source-badge" style="color:var(--text-muted)">sample data (ESPN Cricinfo offline)</span>`
+    : `<span class="live-source-badge">Live scores via ESPN Cricinfo</span>`;
+
+  if (allLive.length === 0) {
     content.innerHTML = `
       <div class="tab-empty-state">
         <div class="empty-icon">🏏</div>
         <p>No live matches right now. Check back during match hours!</p>
-        <p style="font-size:0.8rem;margin-top:var(--space-sm)">Auto-refreshes every 60 seconds.</p>
-        <button class="btn btn-ghost btn-sm" onclick="manualRefresh()" style="margin-top:var(--space-md)">Refresh now</button>
+        <p style="font-size:0.8rem;margin-top:var(--space-sm)">Auto-refreshes every 30 seconds. ${sourceLabel}</p>
+        <button class="btn btn-ghost btn-sm" onclick="manualRefresh()" style="margin-top:var(--space-md)">↺ Refresh now</button>
       </div>
     `;
     return;
   }
 
   content.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md)">
-      <p class="text-secondary" style="font-size:0.875rem">${liveMatches.length} match${liveMatches.length !== 1 ? 'es' : ''} currently in progress</p>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md);flex-wrap:wrap;gap:var(--space-sm)">
+      <p class="text-secondary" style="font-size:0.875rem">${allLive.length} match${allLive.length !== 1 ? 'es' : ''} currently in progress · ${sourceLabel}</p>
       <button class="btn btn-ghost btn-sm" onclick="manualRefresh()">↺ Refresh</button>
     </div>
     <div class="matches-grid stagger-children" id="matches-grid">
-      ${liveMatches.map(m => renderMatchCard(m)).join('')}
+      ${allLive.map(m => renderMatchCard(m)).join('')}
     </div>
   `;
   requestAnimationFrame(() => {
@@ -1926,8 +2019,29 @@ function renderFilteredMatches() {
 
 
 // ============================================
-// API DATA LOADERS
+// DATA LOADERS
 // ============================================
+
+/**
+ * Load live scores from ESPN Cricinfo RSS (zero-config primary source).
+ * Always runs — no API key required.
+ */
+async function loadRssLiveScores() {
+  showRefreshIndicator(true);
+  const result = await CricAPI.fetchLiveScores();
+  showRefreshIndicator(false);
+
+  if (result.data) {
+    AppState.rssLiveMatches = result.data;
+    AppState.rssStatus = result.source === 'fallback' ? 'fallback' : 'ok';
+  } else {
+    AppState.rssLiveMatches = [];
+    AppState.rssStatus = 'fallback';
+  }
+
+  updateFooterApiStatus();
+}
+
 async function loadLiveMatches() {
   if (!CricAPI.isConfigured()) return;
   showRefreshIndicator(true);
@@ -2001,12 +2115,22 @@ function showRefreshIndicator(isActive) {
 }
 
 async function manualRefresh() {
+  // Refresh both RSS and CricketData.org
+  CricAPI.clearRssCache();
   CricAPI.clearCache();
+  AppState.rssLiveMatches = null;
+  AppState.rssStatus = 'loading';
   AppState.apiLiveMatches = null;
   AppState.apiRecentMatches = null;
   AppState.apiUpcomingMatches = null;
 
-  await loadAllMatches();
+  // Always refresh RSS
+  await loadRssLiveScores();
+
+  // Also refresh CricketData.org if connected
+  if (CricAPI.isConfigured()) {
+    await loadAllMatches();
+  }
 
   // Re-render current tab
   if (AppState.currentPage === 'matches') {
@@ -2030,21 +2154,23 @@ async function manualRefresh() {
 
 
 // ============================================
-// AUTO-REFRESH (every 60 seconds for live matches)
+// AUTO-REFRESH (every 30 seconds for live matches)
 // ============================================
 function startLiveRefresh() {
-  stopLiveRefresh(); // clear any existing
+  stopLiveRefresh();
   AppState.liveRefreshTimer = setInterval(async () => {
-    if (!CricAPI.isConfigured()) return;
-
-    // Only hit the API if user is on matches page (live tab) or home
     const shouldRefresh = AppState.currentPage === 'matches' || AppState.currentPage === 'home';
     if (!shouldRefresh) return;
 
-    // Invalidate cache for live data only
-    CricAPI.cache.delete(`${CricAPI.BASE_URL}/currentMatches?apikey=${CricAPI.apiKey}&offset=0`);
+    // Always refresh RSS (zero-config)
+    CricAPI.clearRssCache();
+    await loadRssLiveScores();
 
-    await loadLiveMatches();
+    // Also refresh CricketData.org live data if connected
+    if (CricAPI.isConfigured()) {
+      CricAPI.cache.delete(`${CricAPI.BASE_URL}/currentMatches?apikey=${CricAPI.apiKey}&offset=0`);
+      await loadLiveMatches();
+    }
 
     if (AppState.currentPage === 'home') {
       renderLiveTicker();
@@ -2054,7 +2180,7 @@ function startLiveRefresh() {
       const content = document.getElementById('matches-tab-content');
       if (content) renderLiveTab(content);
     }
-  }, 60 * 1000);
+  }, 30 * 1000);
 }
 
 function stopLiveRefresh() {
@@ -2222,6 +2348,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Update footer status initially
   updateFooterApiStatus();
+
+  // Kick off RSS live scores fetch immediately on startup — zero-config
+  loadRssLiveScores().then(() => {
+    startLiveRefresh();
+    if (AppState.currentPage === 'home') {
+      renderLiveTicker();
+      refreshHomeLiveSection();
+    }
+    if (AppState.currentPage === 'matches' && AppState.matchesTab === 'live') {
+      const c = document.getElementById('matches-tab-content');
+      if (c) renderLiveTab(c);
+    }
+    updateFooterApiStatus();
+  });
 
   // Nav background on scroll
   window.addEventListener('scroll', () => {

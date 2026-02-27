@@ -126,6 +126,9 @@
       <div class="footer-brand">
         <span class="logo-text">CricBoxd</span>
         <p class="footer-tagline">Every match tells a story. Log yours.</p>
+        <div class="footer-api-row">
+          <span id="footer-api-status"></span>
+        </div>
       </div>
       <div class="footer-links">
         <a href="#home">Home</a>
@@ -149,7 +152,48 @@
     </div>
   </footer>
 
+  <!-- ============================================ -->
+  <!-- API KEY MODAL -->
+  <!-- ============================================ -->
+  <div id="api-key-modal" class="modal-overlay hidden">
+    <div class="modal-content api-key-modal">
+      <button class="modal-close" id="api-key-modal-close">&times;</button>
+      <h2 class="modal-title">Connect Live Cricket Data</h2>
+      <div class="api-key-modal-body">
+        <div class="api-key-info">
+          CricBoxd uses <strong>CricketData.org</strong> for real-time live match data.
+          Get your <strong>free API key</strong> (100 hits/day) at
+          <a href="https://cricketdata.org" target="_blank" rel="noopener">cricketdata.org</a>.
+          Your key is stored in memory only — never saved to disk.
+        </div>
+        <div class="form-group">
+          <label class="form-label">Your API Key</label>
+          <div class="api-key-input-wrap">
+            <input type="password" id="api-key-input" class="form-input"
+              placeholder="e.g. a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              autocomplete="off" spellcheck="false">
+            <button class="api-key-toggle-vis" id="api-key-toggle-vis" type="button" title="Show/hide key">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+          <div class="api-key-status testing" id="api-key-status" style="display:none"></div>
+        </div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center" id="api-key-save-btn" onclick="saveApiKey()">
+          Connect &amp; Load Live Matches
+        </button>
+        <p style="text-align:center;margin-top:var(--space-md);font-size:0.8rem;color:var(--text-muted)">
+          No key? The app works fine with sample data.
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('api-key-modal').classList.add('hidden');document.body.style.overflow=''" style="display:inline">Continue without key</button>
+        </p>
+      </div>
+    </div>
+  </div>
+
   <!-- JavaScript -->
+  <script src="./api.js"></script>
   <script src="./data.js"></script>
   <script src="./app.js"></script>
 </body>

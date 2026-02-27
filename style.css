@@ -2247,3 +2247,529 @@ h4 { font-size: 1.125rem; }
   opacity: 0.2;
   margin: var(--space-xl) 0;
 }
+
+/* ============================================
+   LIVE API INTEGRATION STYLES
+   Added for CricketData.org live data
+   ============================================ */
+
+/* ---- API Setup Banner ---- */
+.api-setup-banner {
+  background: linear-gradient(135deg, var(--bg-card) 0%, rgba(245,166,35,0.05) 100%);
+  border-bottom: 1px solid rgba(245, 166, 35, 0.3);
+  padding: var(--space-md) var(--space-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 500;
+}
+
+.api-setup-banner-text {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.api-setup-banner-text .live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: pulseDot 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.api-setup-banner .btn-sm {
+  flex-shrink: 0;
+}
+
+.api-banner-dismiss {
+  position: absolute;
+  right: var(--space-md);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+.api-banner-dismiss:hover {
+  color: var(--text-primary);
+}
+
+/* ---- API Key Modal ---- */
+.api-key-modal {
+  max-width: 480px;
+}
+
+.api-key-modal-body {
+  padding: 0 var(--space-xl) var(--space-xl);
+}
+
+.api-key-info {
+  padding: var(--space-md);
+  background: var(--amber-subtle);
+  border: 1px solid rgba(245, 166, 35, 0.2);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-lg);
+  line-height: 1.6;
+}
+
+.api-key-info a {
+  color: var(--amber);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.api-key-input-wrap {
+  position: relative;
+}
+
+.api-key-input-wrap .form-input {
+  padding-right: 44px;
+  font-family: monospace;
+  font-size: 0.9rem;
+  letter-spacing: 0.03em;
+}
+
+.api-key-toggle-vis {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  padding: 4px;
+}
+
+.api-key-toggle-vis:hover {
+  color: var(--amber);
+}
+
+.api-key-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) 0;
+  font-size: 0.85rem;
+}
+
+.api-key-status.connected { color: var(--success); }
+.api-key-status.error     { color: var(--danger); }
+.api-key-status.testing   { color: var(--text-muted); }
+
+/* ---- API Status Indicator (footer/nav) ---- */
+.api-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+}
+
+.api-status.status-connected {
+  color: var(--success);
+  border-color: rgba(46, 204, 113, 0.2);
+  background: rgba(46, 204, 113, 0.06);
+}
+
+.api-status.status-disconnected {
+  color: var(--text-muted);
+  border-color: var(--border-subtle);
+  background: transparent;
+  cursor: pointer;
+}
+
+.api-status.status-disconnected:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.api-status.status-error {
+  color: var(--danger);
+  border-color: rgba(231, 76, 60, 0.2);
+  background: rgba(231, 76, 60, 0.06);
+}
+
+.api-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.api-status.status-connected .api-status-dot {
+  background: var(--success);
+  animation: pulseDot 2s ease-in-out infinite;
+}
+
+.api-status.status-disconnected .api-status-dot {
+  background: var(--text-muted);
+}
+
+.api-status.status-error .api-status-dot {
+  background: var(--danger);
+}
+
+/* ---- Live Badge ---- */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(231, 76, 60, 0.12);
+  border: 1px solid rgba(231, 76, 60, 0.35);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #e74c3c;
+}
+
+.live-badge::before {
+  content: '';
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e74c3c;
+  animation: pulseDot 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* ---- Match Status Badges ---- */
+.match-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.match-status-badge.live {
+  background: rgba(231, 76, 60, 0.12);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  color: #e74c3c;
+}
+
+.match-status-badge.upcoming {
+  background: rgba(52, 152, 219, 0.12);
+  border: 1px solid rgba(52, 152, 219, 0.3);
+  color: #3498db;
+}
+
+.match-status-badge.completed {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
+/* ---- Live match card glow ---- */
+.match-card.live {
+  border-color: rgba(231, 76, 60, 0.3);
+  box-shadow: 0 0 0 1px rgba(231, 76, 60, 0.12), inset 0 0 32px rgba(231, 76, 60, 0.04);
+}
+
+.match-card.live::before {
+  opacity: 1 !important;
+  background: linear-gradient(90deg, #e74c3c, #c0392b);
+}
+
+.match-card.upcoming {
+  border-color: rgba(52, 152, 219, 0.25);
+}
+
+.match-card.upcoming::before {
+  background: linear-gradient(90deg, #3498db, #2980b9);
+}
+
+/* ---- Loading Skeleton ---- */
+.loading-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.skeleton-line {
+  height: 14px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 25%,
+    var(--bg-elevated) 50%,
+    var(--bg-card) 75%
+  );
+  background-size: 200% 100%;
+  border-radius: 6px;
+  animation: shimmer 1.5s infinite;
+}
+
+.skeleton-line.short  { width: 40%; }
+.skeleton-line.medium { width: 65%; }
+.skeleton-line.long   { width: 100%; }
+.skeleton-line.title  { height: 20px; width: 55%; }
+
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+}
+
+/* ---- Tab Bar (Live / Recent / Upcoming / Classic) ---- */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: var(--space-xl);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.tab-bar::-webkit-scrollbar { display: none; }
+
+.tab-btn {
+  padding: 10px 20px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.tab-btn:hover {
+  color: var(--text-secondary);
+  background: var(--amber-subtle);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.tab-btn.active {
+  color: var(--amber);
+  border-bottom-color: var(--amber);
+}
+
+.tab-btn.tab-live .live-dot-tab {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e74c3c;
+  animation: pulseDot 1.2s ease-in-out infinite;
+}
+
+/* ---- Live Ticker (home page) ---- */
+.live-ticker-wrap {
+  background: rgba(231, 76, 60, 0.07);
+  border-top: 1px solid rgba(231, 76, 60, 0.2);
+  border-bottom: 1px solid rgba(231, 76, 60, 0.2);
+  padding: 10px 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.live-ticker-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-lg);
+  background: linear-gradient(to right, var(--bg-deep) 60%, transparent);
+  gap: var(--space-sm);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #e74c3c;
+  pointer-events: none;
+}
+
+.live-ticker-label .live-badge {
+  pointer-events: none;
+}
+
+.live-ticker-track {
+  display: flex;
+  gap: var(--space-2xl);
+  white-space: nowrap;
+  animation: tickerScroll 30s linear infinite;
+  padding-left: 160px;
+  padding-right: var(--space-2xl);
+}
+
+.live-ticker-track:hover {
+  animation-play-state: paused;
+}
+
+@keyframes tickerScroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.live-ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-md);
+  cursor: pointer;
+  padding: 4px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  transition: background var(--transition-fast);
+  font-size: 0.875rem;
+}
+
+.live-ticker-item:hover {
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.live-ticker-teams {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.live-ticker-score {
+  color: var(--amber);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.live-ticker-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Auto-refresh indicator ---- */
+.refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 4px 10px;
+}
+
+.refresh-indicator svg {
+  animation: rotate360 2s linear infinite;
+}
+
+.refresh-indicator.idle svg { animation: none; }
+
+@keyframes rotate360 {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ---- API tab content area ---- */
+.tab-content {
+  min-height: 200px;
+}
+
+.tab-empty-state {
+  text-align: center;
+  padding: var(--space-3xl) var(--space-lg);
+  color: var(--text-muted);
+}
+
+.tab-empty-state .empty-icon {
+  font-size: 3rem;
+  margin-bottom: var(--space-md);
+  opacity: 0.4;
+}
+
+.tab-empty-state p {
+  font-size: 0.95rem;
+  margin-bottom: var(--space-md);
+}
+
+/* ---- Footer API status row ---- */
+.footer-api-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  justify-content: center;
+  margin-top: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+/* ---- API match card extra info ---- */
+.match-card-tournament {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- API-sourced match detail ---- */
+.api-match-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-card);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-lg);
+}
+
+/* ---- Responsive: hide ticker on small screens ---- */
+@media (max-width: 640px) {
+  .live-ticker-wrap {
+    display: none;
+  }
+
+  .tab-btn {
+    padding: 8px 14px;
+    font-size: 0.8rem;
+  }
+
+  .api-setup-banner {
+    padding: var(--space-sm) var(--space-md);
+    font-size: 0.8rem;
+  }
+}

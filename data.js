@@ -788,3 +788,38 @@ function filterMatches(matches, filters) {
     return true;
   });
 }
+
+// ============================================
+// API DATA MERGE UTILITY
+// ============================================
+
+/**
+ * Merge API matches with sample matches.
+ * Deduplicates by matching team names + approximate date.
+ * API matches take precedence over sample data for overlapping entries.
+ */
+function mergeMatches(apiMatches, sampleMatches) {
+  if (!apiMatches || apiMatches.length === 0) return sampleMatches;
+
+  const result = [...sampleMatches];
+  const sampleKeys = new Set(
+    sampleMatches.map(m => _matchKey(getTeam(m.team1).name, getTeam(m.team2).name, m.date))
+  );
+
+  apiMatches.forEach(apiMatch => {
+    const key = _matchKey(apiMatch.team1, apiMatch.team2, apiMatch.date);
+    if (!sampleKeys.has(key)) {
+      result.push(apiMatch);
+    }
+  });
+
+  return result;
+}
+
+function _matchKey(team1, team2, date) {
+  const t1 = team1.toLowerCase().replace(/\s+/g, '');
+  const t2 = team2.toLowerCase().replace(/\s+/g, '');
+  const [a, b] = [t1, t2].sort();
+  const datePrefix = (date || '').substring(0, 7); // YYYY-MM
+  return `${a}_${b}_${datePrefix}`;
+}
